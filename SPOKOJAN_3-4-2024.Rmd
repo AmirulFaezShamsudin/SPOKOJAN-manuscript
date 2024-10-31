@@ -1,0 +1,1060 @@
+---
+title: "SPOKOJAN"
+author: "Faez"
+date: "2024-04-03"
+output: html_document
+---
+rm(list=ls())
+getwd()
+
+```{r load library, eval=FALSE}
+library(pacman)
+p_load(ggplot2,tidyr,dplyr,ggsci,sjPlot,data.table,ggsignif,lme4,geepack)
+
+rm(list = ls())
+```
+
+```{r load database, eval=FALSE}
+spokojan_database<-read.csv("/Users/Faez/Folder_yoy/RA_TIDREC UM 2023/SPOKOJAN/Data_analysis/spokojan_mosquito_index_3-4-2024.csv")
+
+```
+
+```{r dummy table, eval=FALSE}
+dummy_table_MI_group<-data.frame(group=factor(c("Treated","Baseline_1","Placebo","Baseline_2"),levels =(c("Treated","Baseline_1","Placebo","Baseline_2"))) ,mosquito.index=0)
+dummy_boxplot<-ggplot(dummy_table_MI_group,aes(x=group,y=mosquito.index))+
+  theme_classic()+
+  labs(title = "Total Mosquito Index",y="Total Mosquito Index",x="Treatment Group")+
+  theme(plot.title = element_text(hjust = 0.5),axis.text.x = element_text(angle = 45,hjust = 1))+
+  scale_y_continuous(limits = c(0,100),breaks = seq(0,100,by=20))
+ggsave("dummy_boxplot.png",plot = dummy_boxplot,width = 6,height = 4,dpi = 350,bg="white")
+
+dummy_line_graph<-data.frame(
+  collection.period = factor(c("Week 2", "Week 4", "Week 6", "Week 8", "Week 10", "Week 12", "Week 14", "Week 16", "Week 18", "Week 20", "Week 22"),levels = c("Week 2", "Week 4", "Week 6", "Week 8", "Week 10", "Week 12", "Week 14", "Week 16", "Week 18", "Week 20", "Week 22")),mosquito.index.dummy = 0)
+dummy_temporal_distribution_MI<-ggplot(dummy_line_graph,aes(x=collection.period,y=mosquito.index.dummy))+theme_classic()+
+  labs(title = "Temporal Distribution of Mosquito Index",x="Collection Week",y="Mosquito Index")+
+  theme(plot.title = element_text(hjust = 0.5),axis.text.x = element_text(angle = 45,hjust = 1))+
+  scale_y_continuous(limits = c(0,100),breaks = seq(0,100,by=20))
+ggsave("dummy_line.png",plot = dummy_temporal_distribution_MI,width = 6,height = 4,dpi = 350,bg="white")
+
+
+```
+
+```{r boxplot for total mosquito index between treatde vs placebo vs baseline}
+##re-label week, add into new column, relocate new column
+spokojan_database_added<-spokojan_database%>%
+  rowwise()%>%
+  mutate(Week_ending=case_when(
+    nchar(Week) == 5 ~ substr(Week, 4, 5),   
+    nchar(Week) == 6 ~ substr(Week, 4, 6),   
+    nchar(Week) == 7 ~ substr(Week, 5, 7),   
+    TRUE ~ Week                              
+  ))%>%ungroup()
+spokojan_database_added<-spokojan_database_added%>%dplyr::relocate(Week_ending,.after = Week)
+
+##add new column, as we want to compare treatment vs baseline; placebo vs baseline
+spokojan_database_added_2 <- spokojan_database_added %>%
+  rowwise() %>%mutate(Event.full = case_when(
+    Arm == "Treatment" ~ paste0("Treatment_", Event),
+    Arm == "Placebo" ~ paste0("Placebo_", Event),
+    TRUE ~ Arm)) %>%ungroup()
+spokojan_database_added_2<-spokojan_database_added_2%>%dplyr::relocate(Event.full,.after = Event)
+
+##we want to perform dependent t test between baseline and intervention for both placebo and treatment group
+##need to re shape df into wide format
+spokojan_database_added_2_wide<-spokojan_database_added_2%>%pivot_wider(id_cols = c(Zone,Week_ending),names_from = Event.full,values_from = Total)
+
+##create df for treatment group 
+spokojan_database_added_2_treatment_baseline<-spokojan_database_added_2_wide%>%filter(Zone%in%c("1","4"))
+##filter, remove unused columns
+spokojan_database_added_2_treatment_baseline<-spokojan_database_added_2_treatment_baseline%>%dplyr::select(c(1:4))
+spokojan_database_added_2_treatment_baseline<-spokojan_database_added_2_treatment_baseline%>%filter(Treatment_Intervention!="NA")
+
+##create df for placebo group
+spokojan_database_added_2_placebo_baseline<-spokojan_database_added_2_wide%>%filter(Zone%in%c("2","3"))
+##filter, remove unused columns
+spokojan_database_added_2_placebo_baseline<-spokojan_database_added_2_placebo_baseline%>%dplyr::select(c(1:2,5:6))
+spokojan_database_added_2_placebo_baseline<-spokojan_database_added_2_placebo_baseline%>%filter(Placebo_Intervention!="NA")
+
+##check difference between intervention and baseline within each placebo and treatment
+spokojan_database_added_2_treatment_baseline<-spokojan_database_added_2_treatment_baseline%>%mutate(difference=Treatment_Intervention-Treatment_Baseline)
+spokojan_database_added_2_placebo_baseline<-spokojan_database_added_2_placebo_baseline%>%mutate(difference=Placebo_Intervention-Placebo_Baseline)
+
+##check normality of difference between baseline and intervention within each group
+hist(spokojan_database_added_2_treatment_baseline[["difference"]], xlim = c(-300,100),breaks =20)
+hist(spokojan_database_added_2_placebo_baseline[["difference"]],xlim=c(-300,100),breaks=20)
+shapiro.test(spokojan_database_added_2_treatment_baseline$difference)
+shapiro.test(spokojan_database_added_2_placebo_baseline$difference)
+
+##data not met normality assumption, then use Wilcoxon Signed Rank Test
+Wilcoxon_treatment<- wilcox.test(spokojan_database_added_2_treatment_baseline$Treatment_Baseline,spokojan_database_added_2_treatment_baseline$Treatment_Intervention, paired = TRUE, exact = FALSE)
+Wilcoxon_placebo<-wilcox.test(spokojan_database_added_2_placebo_baseline$Placebo_Baseline,spokojan_database_added_2_placebo_baseline$Placebo_Intervention, paired = TRUE, exact = FALSE)
+print(Wilcoxon_treatment$p.value)
+print(Wilcoxon_placebo$p.value)
+
+##plot box plot
+##convert to long format
+spokojan_database_added_2_treatment_baseline_long<-pivot_longer(spokojan_database_added_2_treatment_baseline,cols = Treatment_Baseline:Treatment_Intervention,names_to = "Arm",values_to = "MI")
+ggplot(spokojan_database_added_2_treatment_baseline_long,aes(x=Arm,y=MI))+
+  geom_boxplot(fill="white",color="black",size=0.8,width=0.5)+
+  geom_signif(comparisons = list(c("Treatment_Baseline", "Treatment_Intervention")), 
+              map_signif_level = TRUE,
+              annotations = "P<0.001")+
+  theme_sjplot()+
+  geom_point(position=position_dodge(width = 0.75),colour="red",size=2.5)+
+  labs(y="Total Mosquito Index")+
+  theme(axis.text.x=element_text(hjust = 0.5))
+
+spokojan_database_added_2_placebo_baseline_long<-pivot_longer(spokojan_database_added_2_placebo_baseline,cols = Placebo_Baseline:Placebo_Intervention,names_to = "Arm",values_to = "MI")
+ggplot(spokojan_database_added_2_placebo_baseline_long,aes(x=Arm,y=MI))+
+  geom_boxplot(fill="white",color="black",size=0.8,width=0.5)+
+  geom_signif(comparisons = list(c("Placebo_Baseline", "Placebo_Intervention")), 
+              map_signif_level = TRUE,
+              annotations = "P<0.001")+
+  theme_sjplot()+
+  geom_point(position=position_dodge(width = 0.75),colour="red",size=2.5)+
+  labs(y="Total Mosquito Index")+
+  theme(axis.text.x=element_text(hjust = 0.5))
+
+##combine both box plot
+combined_df<-bind_rows(spokojan_database_added_2_placebo_baseline_long,spokojan_database_added_2_treatment_baseline_long)
+box_plot_spokojan_combined<-ggplot(combined_df,aes(x=Arm,y=MI))+
+  geom_boxplot(fill="white",color="black",size=0.8,width=0.5)+
+  geom_signif(comparisons = list(c("Placebo_Baseline", "Placebo_Intervention"),c("Treatment_Baseline", "Treatment_Intervention")), 
+              map_signif_level = TRUE,
+              annotations = "P<0.001",vjust = -1)+
+  theme_classic()+
+  geom_point(position=position_dodge(width = 0.75),colour="red",size=2.5)+
+  labs(y="Total Mosquito Index",title = "Total Mosquito Index between Baseline vs Intervention")+
+  theme(axis.text.x=element_text(angle=45,hjust = 1),plot.title = element_text(hjust = 0.5))+
+  ylim(c(0,400))
+ggsave("boxplot_spokojan_combined.png",plot = box_plot_spokojan_combined,width = 8,height = 6,dpi=350,bg="white")
+
+```
+
+```{r database-normalize value of MI and boxplot for visualization, eval=FALSE}
+
+##need to find mean of mosquito index for each week (count divide by total trap for the zone), and mean for baseline  (count divide by total trap for zone). Then find the normalize value for mean mosquito index for each week. Use this data to create pairwise comparison between placebo vs treatment
+##Zone 1, n=108
+##Zone 2, n=110
+##Zone 3, n=92
+##Zone 4, n=74
+##start from spokojan database added
+spokojan_database_added_mean<-spokojan_database_added%>%rowwise()%>%
+  mutate(average.MI=case_when(Zone=="1"~round((Total/108),2),
+                           Zone=="2"~round((Total/110),2),
+                           Zone=="3"~round((Total/92),2),
+                           Zone=="4"~round((Total/74),2),
+                           TRUE~Total))%>%ungroup()
+
+##find mean for baseline
+spokojan_database_baseline_value<-spokojan_database_added_mean%>%filter(Event=="Baseline")%>%group_by(Arm,Zone)%>%summarise(Average.baseline.value=round((mean(average.MI)),2),.groups = "drop")
+##baseline value for placebo (zone 2) = 1.24, placebo (zone 3) = 1.19; treatment (Zone 1) = 1.25, treatment (Zone 4) = 1.52 
+##now to find normalize value of MI for placebo and treatment, divide mean count MI with baseline
+spokojan_database_added_mean <- spokojan_database_added_mean %>%
+  rowwise() %>%
+  mutate(Normalize.MI = case_when(
+    Zone == "1" & Event == "Intervention" ~ round(average.MI / 1.25, 2),
+    Zone == "2" & Event == "Intervention" ~ round(average.MI / 1.24, 2),
+    Zone == "3" & Event == "Intervention" ~ round(average.MI / 1.19, 2),
+    Zone == "4" & Event == "Intervention" ~ round(average.MI / 1.52, 2),
+    TRUE ~ average.MI
+  )) %>%
+  ungroup()
+head(spokojan_database_added_mean)
+
+
+##filter to select only intervention data from placebo and treatment group
+spokojan_database_added_mean_compare_normalize<-spokojan_database_added_mean%>%filter(Event=="Intervention")
+
+##check data normality
+ggplot(spokojan_database_added_mean_compare_normalize, aes(x = Normalize.MI)) + 
+  geom_histogram(binwidth = 0.1, fill = "blue", color = "black") + # Adjust binwidth as needed
+  facet_wrap(~ Arm) +
+  scale_x_continuous(limits = c(0, 1.5), breaks = seq(0, 3, by = 0.2)) + # Define x-axis limits and breaks
+  theme_minimal() +
+  labs(title = "Distribution of Normalize.MI by Arm",
+       x = "Normalize.MI",
+       y = "Count")+
+  theme(axis.text.x = element_text(NULL))
+shapiro.test(subset(spokojan_database_added_mean_compare_normalize,Arm=="Treatment")$Normalize.MI)
+shapiro.test(subset(spokojan_database_added_mean_compare_normalize,Arm=="Placebo")$Normalize.MI)
+spokojan_database_added_mean_compare_normalize<-spokojan_database_added_mean_compare_normalize%>%mutate(log10_normalized=log10(Normalize.MI))
+shapiro.test(subset(spokojan_database_added_mean_compare_normalize,Arm=="Treatment")$log10_normalized)
+shapiro.test(subset(spokojan_database_added_mean_compare_normalize,Arm=="Placebo")$log10_normalized)
+##log10 transformed data now normally distributed
+##compute t test of log10(normalized mean MI)
+t.test.result<-t.test(log10_normalized~Arm,data = spokojan_database_added_mean_compare_normalize)
+print(t.test.result$p.value)
+
+##plot box plot
+log10_normalizedMI<-ggplot(spokojan_database_added_mean_compare_normalize,aes(x=Arm,y=log10_normalized))+
+  geom_boxplot(fill="white",color="black",size=0.8,width=0.5)+
+  labs(title = "Normalized Mean Mosquito Index between Placebo vs Treatment",y="log10(Normalized Mosquito Index)")+
+  geom_point(position=position_dodge(width = 0.75),colour="red",size=2.5)+
+  geom_signif(comparisons = list(c("Placebo", "Treatment")), 
+              map_signif_level = TRUE,
+              annotations = "NS")+
+  theme_classic()+
+    theme(plot.title = element_text(hjust = 0.5))
+ggsave("log10.normalized.MI.png",plot = log10_normalizedMI,bg="white",width = 6,height = 4,dpi=350)
+
+################to use normalize mean MI, and compare bwteeen both groups, no need log transformation as MI not-normally presented in log scale
+shapiro.test(subset(spokojan_database_added_mean_compare_normalize,Arm=="Treatment")$Normalize.MI)
+shapiro.test(subset(spokojan_database_added_mean_compare_normalize,Arm=="Placebo")$Normalize.MI)
+ggplot(spokojan_database_added_mean_compare_normalize, aes(x = Normalize.MI)) + 
+  geom_histogram(binwidth = 0.1, fill = "darkred", color = "black") + # Adjust binwidth as needed
+  facet_wrap(~ Arm) +
+  scale_x_continuous(limits = c(0, 1.5), breaks = seq(0, 3, by = 0.2)) + # Define x-axis limits and breaks
+  theme_minimal() +
+  labs(title = "Distribution of Normalize.MI by Arm",
+       x = "Normalize.MI",
+       y = "Count")
+
+##Normalized mean MI is skewed to the left. To use Mann-Whitney Test to compare normalized mean MI between placebo and treatment, as normality assumption not met
+Mann_Whitney_test_result_for_norm.MI <- wilcox.test(Normalize.MI ~ Arm,
+                                        data = spokojan_database_added_mean_compare_normalize,
+                                        conf.int = TRUE,
+                                        conf.level = 0.95)
+print(Mann_Whitney_test_result_for_norm.MI$p.value)
+##plot boxplot
+box.plot.normalized<-ggplot(spokojan_database_added_mean_compare_normalize,aes(x=Arm,y=Normalize.MI))+
+  geom_boxplot(fill="white",color="black",size=0.8,width=0.5)+
+  labs(title = "Normalized Mean Mosquito Index between Placebo vs Treatment",y="Normalized Mosquito Index",x="Group")+
+  geom_point(position=position_dodge(width = 0.75),colour="red",size=2.5)+
+  geom_signif(comparisons = list(c("Placebo", "Treatment")), 
+              map_signif_level = TRUE,
+              annotations = "NS")+
+  theme_classic()+
+  theme(plot.title = element_text(hjust = 0.5))
+ggsave("box.plot.normalized.MI.png",plot = box.plot.normalized,bg="white",width = 6,height = 4,dpi = 350)
+spokojan.normalized.summary<-spokojan_database_added_mean_compare_normalize%>%group_by(Arm)%>%summarise(Median.normalized.MI=median(Normalize.MI),
+             IQR(Normalize.MI))
+write.csv(spokojan_database_added_mean_compare_normalize,"spokojan_database.csv")
+write.csv(spokojan.normalized.summary,"spokojan_summary.csv")
+```
+```{r SPOKOJAN - sociodemographic data, eval=FALSE}
+spokojan_survey<-read.csv("/Users/Faez/Folder_yoy/RA_TIDREC UM 2023/SPOKOJAN/Raw_data/RAW DATA/Questionnaire/SPSS SPOKOJAN_250718_13 DUPLICATE.csv")
+
+##filter 999 as missing values
+spokojan_survey_filtered<-spokojan_survey%>%filter(!ID=="999")
+##Baseline data for 6 months were collected by placing ovipostional trap in 383 identified locations
+##Pre-trial questionnaire were distributed in 693 houses
+##From 693 houses, 460 agreed to receive treatment/pacebo
+##From 460, 437 managed to complete post-trial questionnaire
+
+##sort ID into ascending order
+spokojan_survey_filtered<-spokojan_survey_filtered[order(spokojan_survey_filtered$ID),]
+##check for duplicates
+duplicated_row<-duplicated(spokojan_survey_filtered$ID_No)
+duplicated_row_2<-spokojan_survey_filtered[duplicated_row,]
+print(duplicated_row_2)
+
+##check for gaps
+as.numeric(spokojan_survey_filtered)
+diffs <- diff(spokojan_survey_filtered$ID)
+gaps <- which(diffs != 1)
+
+if (length(gaps) > 0) {
+  cat("There are gaps in the sequence at positions:", gaps, "\n")
+  cat("The missing values are:", spokojan_survey_filtered$ID[gaps] + 1, "\n")
+} else {
+  cat("There are no gaps in the sequence.\n")
+}
+
+##hence 10 duplicates + 4 gaps, which is why 703 observations, but the ID is until 726
+##ignore the gaps, filter out the duplicates
+spokojan_survey_filtered_duplicates<-spokojan_survey_filtered[!duplicated(spokojan_survey_filtered$ID_No),]
+
+##rename the variables first, then select needed columns for analysis
+##use spokojan_survey_filtered_duplicates
+spokojan_sociodemographic<-spokojan_survey_filtered_duplicates%>%select(c(ID,ID_No,A1.1,A1.2,A1.3,A1.3_o,A1.4,A1.4_o,A1.5,A1.6,A1.7.a,A1.7.t,A1.7.o,A1.8,A1.9))
+
+spokojan_sociodemographic<-spokojan_sociodemographic%>%rename(
+  Age=A1.1,
+  Gender=A1.2,
+  Race=A1.3,
+  Other.race=A1.3_o,
+  Religion=A1.4,
+  Other.religion=A1.4_o,
+  Highest.Education.Level=A1.5,
+  Occupation=A1.6,
+  Number.of.ppl.live_Adult=A1.7.a,
+  Number.of.ppl.live_Children=A1.7.t,
+  Number.of.ppl.live_oldpeople=A1.7.o,
+  Average.monthly.household.income=A1.8,
+  House.type=A1.9)
+
+spokojan_sociodemographic<-spokojan_sociodemographic%>%mutate(
+  Gender=as.character(Gender),
+  Gender=case_when(Gender=="1" ~ "Male",
+                   Gender=="2" ~ "Female",
+                   TRUE ~ Gender))
+spokojan_sociodemographic<-spokojan_sociodemographic%>%mutate(
+  Race=as.character(Race),
+  Race=case_when(Race=="1" ~ "Malay",
+                 Race=="2" ~ "Chinese",
+                 Race=="3" ~ "Indian",
+                 Race=="4" ~ "Others",
+                 TRUE ~ Race))
+spokojan_sociodemographic<-spokojan_sociodemographic%>%mutate(
+  Religion=as.character(Religion),
+  Religion=case_when(Religion=="1" ~ "Muslims",
+                     Religion=="2" ~ "Buddhist",
+                     Religion=="3" ~ "Taoist",
+                     Religion=="4" ~ "Hindu",
+                     Religion=="5" ~ "Christian",
+                     Religion=="6" ~ "Others",
+                     TRUE~Religion))
+spokojan_sociodemographic<-spokojan_sociodemographic%>%mutate(
+  Highest.Education.Level=as.character(Highest.Education.Level),
+  Highest.Education.Level=case_when(Highest.Education.Level=="1"~"No formal education",
+                                    Highest.Education.Level=="2"~"Primary school",
+                                    Highest.Education.Level=="3"~"Secondary school",
+                                    Highest.Education.Level=="4"~"Tertiary education",
+                                    TRUE~Highest.Education.Level))
+
+spokojan_sociodemographic<-spokojan_sociodemographic%>%mutate(
+  Occupation=as.character(Occupation),
+  Occupation=case_when(Occupation=="1"~"Professional/Managerial",
+                                    Occupation=="2"~"Skilled worker",
+                                    Occupation=="3"~"Non-skilled worker",
+                                    Occupation=="4"~"Student",
+                                    Occupation=="5"~"Housewife",
+                                    Occupation=="6"~"Retiree",
+                                    Occupation=="7"~"Others",
+                                    TRUE~Occupation))
+
+str(spokojan_sociodemographic$Number.of.ppl.live_Adult)
+str(spokojan_sociodemographic$Number.of.ppl.live_Children)
+str(spokojan_sociodemographic$Number.of.ppl.live_oldpeople)
+spokojan_sociodemographic<-spokojan_sociodemographic%>%rowwise()%>%mutate(
+  Total.household=sum(c_across(Number.of.ppl.live_Adult:Number.of.ppl.live_oldpeople)))
+spokojan_sociodemographic<-spokojan_sociodemographic%>%relocate(Total.household,.after = Occupation)
+
+spokojan_sociodemographic<-spokojan_sociodemographic%>%mutate(
+Average.monthly.household.income=as.character(Average.monthly.household.income),
+Average.monthly.household.income=case_when(Average.monthly.household.income=="1"~"RM1001-2000",
+                                           Average.monthly.household.income=="2"~"RM2001-3000",
+                                           Average.monthly.household.income=="3"~"RM3001-4000",
+                                           Average.monthly.household.income=="4"~"RM4001-5000",
+                                           Average.monthly.household.income=="5"~">RM5000",
+                                           TRUE~Average.monthly.household.income))
+
+spokojan_sociodemographic<-spokojan_sociodemographic%>%mutate(
+  House.type=as.character(House.type),
+  House.type=case_when(House.type=="1"~"Own property",
+                       House.type=="2"~"Rental",
+                       TRUE~House.type))
+
+spokojan_sociodemographic_summary<-spokojan_sociodemographic%>%ungroup()%>%summarise(
+  Median.age=median(Age,na.rm=TRUE),
+  IQR.range=IQR(Age,na.rm=TRUE),
+  Mean.age=mean(Age,na.rm=TRUE),
+  Std.age=sd(Age, na.rm=TRUE),
+  Max.age=max(Age,na.rm=TRUE),
+  Min.age=min(Age,na.rm=TRUE))
+
+spokojan_sociodemographic_summary_Gender<-spokojan_sociodemographic%>%
+  group_by(Gender)%>%summarise(
+Gender.count=n())%>%ungroup()%>%mutate(                         Percent.gender=round((Gender.count/sum(Gender.count))*100,2))
+
+spokojan_sociodemographic_summary_Race<-spokojan_sociodemographic%>%
+  group_by(Race)%>%summarise(
+Race.count=n())%>%ungroup()%>%mutate(
+  Percentage.race=round((Race.count/sum(Race.count))*100,2))
+
+spokojan_sociodemographic_summary_otherrace<-spokojan_sociodemographic%>%filter(!Other.race=="99")%>%group_by(Other.race)%>%summarise(
+Other.race.count=n())%>%ungroup()%>%mutate(
+Percent.other.race=round((Other.race.count/sum(Other.race.count))*100,2))
+
+spokojan_sociodemographic_summary_religion<-spokojan_sociodemographic%>%
+  group_by(Religion)%>%summarise(
+Religion.count=n())%>%ungroup()%>%mutate(
+  Percentage.religion=round((Religion.count/sum(Religion.count))*100,2))
+
+spokojan_sociodemographic_summary_education<-spokojan_sociodemographic%>%
+  group_by(Highest.Education.Level)%>%summarise(
+Education.count=n())%>%ungroup()%>%mutate(
+  Percentage.education=round((Education.count/sum(Education.count))*100,2))
+
+spokojan_sociodemographic_summary_occupation<-spokojan_sociodemographic%>%
+  group_by(Occupation)%>%summarise(
+Occupation.count=n())%>%ungroup()%>%mutate(
+  Percentage.occupation=round((Occupation.count/sum(Occupation.count))*100,2))
+
+spokojan_sociodemographic_household<-spokojan_sociodemographic%>%
+  mutate(Total.household=as.character(Total.household))%>%
+  group_by(Total.household)%>%summarise(
+Total.household.count=n())%>%ungroup()%>%mutate(
+  Percentage.total.household=round((Total.household.count/sum(Total.household.count))*100,2))
+as.integer(spokojan_sociodemographic_household$Total.household)
+spokojan_sociodemographic_household2<-spokojan_sociodemographic_household%>%mutate(
+Total.household.category=case_when(Total.household<=2 ~ "0-2",
+                                   Total.household>2 & Total.household<=4~ "3-4",
+                                   Total.household>4 & Total.household<=6 ~ "5-6",
+                                   Total.household>6 & Total.household<=8 ~ "7-8",
+                                   Total.household>8 | Total.household<=10 ~ "9-10"))
+as.integer(spokojan_sociodemographic_household2$Total.household.count)
+spokojan_sociodemographic_household3<-spokojan_sociodemographic_household2%>%group_by(Total.household.category)%>%summarise(Category.count=sum(Total.household.count))%>%ungroup()%>%mutate(
+  Percent.category=round((Category.count/sum(Category.count))*100,2))
+
+spokojan_sociodemographic_income<-spokojan_sociodemographic%>%
+  group_by(Average.monthly.household.income)%>%summarise(
+Monthly.income.count=n())%>%ungroup()%>%mutate(
+  Percentage.monthly.income=round((Monthly.income.count/sum(Monthly.income.count))*100,2))
+
+spokojan_sociodemographic_housetype<-spokojan_sociodemographic%>%
+  group_by(House.type)%>%summarise(
+Housetype.count=n())%>%ungroup()%>%mutate(
+  Percentage.Housetype=round((Housetype.count/sum(Housetype.count))*100,2))
+
+
+
+```
+
+```{r SPOKOJAN - pre-trial KAP assesment, eval=FALSE}
+##start with spokojan_survey_filtered_duplicates
+##filter for variables under knowldege domain
+spokojan_knowledge<-spokojan_survey_filtered_duplicates%>%select(c(ID,ID_No,D1:D5.3))
+##rename variables
+spokojan_knowledge<-spokojan_knowledge%>%rename(
+  'Do you think mosquito borne disease is dangerous?'=D1,
+  'Mosquito borne disease does not always lead to death'=D1.1,
+  'Mosquito borne disease infection is only dangerous to children'=D1.2,
+  'Mosquito borne disease infection is only dangerous to old people'=D1.3,
+  'how do you rate your likelihood of getting mosquito borne disease?'=D2,
+  'For those who have had mosquito borne diseases, how likely are you to get it again?'=D2.i,
+  'You are unlikely to get mosquito borne disease because there are no related cases in your neighborhood'=D2.1,
+  'You are unlikely to get mosquito borne disease because you carry out proper mosquito prevention practices'=D2.2,
+  'You are unlikely to get mosquito borne disease because your body is healthy'=D2.3,
+  'You are unlikely to get mosquito borne disease because your house surrounding is clean'=D2.4,
+  'How do you rate the  barriers you face to prevent mosquito borne disease'=D3,
+  'Lack of community participation in taking preventive measures against mosquito borne disease is a barrier for you to prevent it.'=D3.1,
+  'Lack of self-efficacy in taking preventive measures against vector borne disease is a barrier for you to prevent it'=D3.2,
+  'Lack of preventive measures from authorities is a barrier for you to prevent mosquito borne disease'=D3.3,
+  'How do you rate any cues to action – incidence that motivate someone to carry out the prevention practices like  death of family member from mosquito borne disease, encouragemen'=D4,
+  'Enlightenment from mass media about mosquito borne disease encourage you to carry out the prevention'=D4.1,
+  'If there is any cases of mosquito borne disease reported in your neighborhood, you will be encourage to carry out the prevention'=D4.2,
+  'Enforcement of authorities will encourage you to carry out the prevention (like fogging)'=D4.3,
+  'please rate your confidence level to carry out mosquito borne disease prevention activities'=D.5,
+  'If the people in your surrounding area carry out mosquito borne disease prevention practices, you will be more confident to do so.'=D5.1,
+  'If you were encouraged by authorities about mosquito borne disease prevention practices, you will be more confident to it.'=D5.2,
+  'If someone infected with mosquito borne disease in your neighborhood, you will be more confident to do prevention.'=D5.3)
+
+##barriers variables is reversed. Need to reverse the binary 
+##ABANDON!! Dr Jefree dont want KAP assesment, only few variables pre and post for comparison
+
+```
+
+```{r SPOKOJAN - descriptive claims, pre vs post, eval=FALSE}
+##use spokojan survey, filter desired columns only, and rename
+spokojan_claims<-spokojan_survey_filtered_duplicates%>%select(c(ID,ID_No,C1:C6,PSA1:PSA6))
+spokojan_claims<-spokojan_claims%>%rename(
+  'Pre_C1'=C1,
+  'Pre_C2'=C2,
+  'Pre_C3a'=C3a,
+  'Pre_C3b'=C3b,
+  'Pre_C3c'=C3c,
+  'Pre_C3d'=C3d,
+  'Pre_C3e'=C3e,
+  'Pre_C3f'=C3f,
+  'Pre_C4'=C4,
+  'Pre_C5'=C5,
+  'Pre_C6'=C6,
+  'Post_C1'=PSA1,
+  'Post_C2'=PSA2,
+  'Post_C3a'=PSA3a,
+  'Post_C3b'=PSA3b,
+  'Post_C3c'=PSA3c,
+  'Post_C3d'=PSA3d,
+  'Post_C3e'=PSA3e,
+  'Post_C3f'=PSA3f,
+  'Post_C4'=PSA4,
+  'Post_C5'=PSA5,
+  'Post_C6'=PSA6)
+
+spokojan_claims <- spokojan_claims %>%
+  mutate(across(Pre_C1:Post_C6, as.character))
+
+spokojan_claims<-spokojan_claims%>%mutate(
+  Pre_C1=case_when(Pre_C1=="1"~"None",
+                   Pre_C1=="2"~"Low",
+                   Pre_C1=="3"~"Moderate",
+                   Pre_C1=="4"~"Severe",
+                   Pre_C1=="6"~"Severe",
+                   TRUE~Pre_C1),
+  Pre_C2=case_when(Pre_C2=="1"~"None",
+                   Pre_C2=="2"~"1-5",
+                   Pre_C2=="3"~"6-10",
+                   Pre_C2=="4"~">10",
+                   TRUE~Pre_C2),
+  Pre_C4=case_when(Pre_C4=="1"~"Yes",
+                   Pre_C4=="2"~"No",
+                   TRUE~Pre_C4),
+  Pre_C6=case_when(Pre_C6=="1"~"Yes",
+                   Pre_C6=="2"~"No",
+                   TRUE~Pre_C6),
+  Post_C1=case_when(Post_C1=="1"~"None",
+                   Post_C1=="2"~"Low",
+                   Post_C1=="3"~"Moderate",
+                   Post_C1=="4"~"Severe",
+                   TRUE~Post_C1),
+  Post_C2=case_when(Post_C2=="1"~"None",
+                   Post_C2=="2"~"1-5",
+                   Post_C2=="3"~"6-10",
+                   Post_C2=="4"~">10",
+                   TRUE~Post_C2),
+  Post_C4=case_when(Post_C4=="1"~"Yes",
+                   Post_C4=="2"~"No",
+                   TRUE~Post_C4),
+  Post_C6=case_when(Post_C6=="1"~"Yes",
+                   Post_C6=="2"~"No",
+                   TRUE~Post_C6))
+
+spokojan_claims<-spokojan_claims%>%mutate(
+  Pre_C3a=case_when(Pre_C3a=="1"~"Yes",
+                    Pre_C3a=="2"~"No",
+                    TRUE~Pre_C3a),
+  Pre_C3b=case_when(Pre_C3b=="1"~"Yes",
+                    Pre_C3b=="2"~"No",
+                    TRUE~Pre_C3b),
+  Pre_C3c=case_when(Pre_C3c=="1"~"Yes",
+                    Pre_C3c=="2"~"No",
+                    TRUE~Pre_C3c),
+  Pre_C3d=case_when(Pre_C3d=="1"~"Yes",
+                    Pre_C3d=="2"~"No",
+                    TRUE~Pre_C3d),
+  Pre_C3e=case_when(Pre_C3e=="1"~"Yes",
+                    Pre_C3e=="2"~"No",
+                    TRUE~Pre_C3e),
+  Pre_C3f=case_when(Pre_C3f=="1"~"Yes",
+                    Pre_C3f=="2"~"No",
+                    TRUE~Pre_C3f),
+  Post_C3a=case_when(Post_C3a=="1"~"Yes",
+                    Post_C3a=="2"~"No",
+                    TRUE~Post_C3a),
+  Post_C3b=case_when(Post_C3b=="1"~"Yes",
+                    Post_C3b=="2"~"No",
+                    TRUE~Post_C3b),
+  Post_C3c=case_when(Post_C3c=="1"~"Yes",
+                    Post_C3c=="2"~"No",
+                    TRUE~Post_C3c),
+  Post_C3d=case_when(Post_C3d=="1"~"Yes",
+                    Post_C3d=="2"~"No",
+                    TRUE~Post_C3d),
+  Post_C3e=case_when(Post_C3e=="1"~"Yes",
+                    Post_C3e=="2"~"No",
+                    TRUE~Post_C3e),
+  Post_C3f=case_when(Post_C3f=="1"~"Yes",
+                    Post_C3f=="2"~"No",
+                    TRUE~Post_C3f))
+##add columns of zone
+str(spokojan_claims$ID_No)
+spokojan_claims_2<-spokojan_claims%>%mutate(Road.no=sub("-.*", "", spokojan_claims$ID_No))
+spokojan_claims_2<-spokojan_claims_2%>%mutate(Road.no=sub("C","",spokojan_claims_2$Road.no))
+as.numeric(spokojan_claims_2$Road.no)
+spokojan_claims_2 <- spokojan_claims_2 %>%
+  mutate(
+    Intervention.group = case_when(Road.no <= 16 ~ "Treatment",
+      Road.no > 16 & Road.no <= 33 ~ "Placebo",
+      Road.no > 33 & Road.no <= 40 ~ "Treatment"))
+spokojan_claims_2<-spokojan_claims_2%>%mutate(Intervention.group=replace_na(Intervention.group,"Treatment"))
+is.na(spokojan_claims_2$Intervention.group)
+
+spokojan_claims_2 <- spokojan_claims_2 %>%
+  mutate(
+    Zone = case_when(Road.no <= 16 ~ "Zone 1",
+      Road.no > 16 & Road.no <= 27 ~ "Zone 2",
+      Road.no > 27 & Road.no <= 33 ~ "Zone 3",
+      Road.no > 33 & Road.no <= 40 ~ "Zone 4"))
+spokojan_claims_2<-spokojan_claims_2%>%mutate(Zone=replace_na(Zone,"Zone 1"))
+
+
+spokojan_mosquitorate_pre<-spokojan_claims_2%>%group_by(Zone,Pre_C1)%>%summarize(count.=n())%>%ungroup()%>%group_by(Zone)%>%mutate(Percent.count=round((count./sum(count.))*100,2))%>%ungroup()
+spokojan_mosquitorate_pre_zone<-spokojan_mosquitorate_pre%>%group_by(Zone)%>%summarise(sum(count.))%>%ungroup()
+
+
+##post trial data
+spokojan_claims_post<-spokojan_claims%>%select(c(ID,ID_No,Post_C1:Post_C6))
+spokojan_zone_only<-spokojan_claims_2%>%select(Zone,ID_No)
+spokojan_claims_post<-full_join(spokojan_claims_post,spokojan_zone_only,by="ID_No")
+spokojan_claims_post<-spokojan_claims_post%>%relocate(Zone,.after = ID_No)
+spokojan_claims_post<-spokojan_claims_post%>%mutate(
+  Intervention.group=case_when(Zone=="Zone 1" ~ "Treatment",
+                               Zone=="Zone 2" ~ "Placebo",
+                               Zone=="Zone 3" ~ "Placebo",
+                               Zone=="Zone 4" ~ "Treatment"))
+spokojan_claims_post<-spokojan_claims_post%>%relocate(Intervention.group,.after = Zone)
+
+##filter for missing data
+is.na(spokojan_claims_post)
+spokojan_claims_post<-spokojan_claims_post%>%filter(!Post_C1=="999")
+is.na(spokojan_claims_post$Post_C1)
+##check for blank or NA values
+any(is.na(spokojan_claims_post))
+any(spokojan_claims_post=="")
+blank_value<-which(spokojan_claims_post=="",arr.ind = "TRUE")
+if (length(blank_value)>0){
+  print("blank values found at:")
+  print(blank_value)
+  }else{
+  print("No blank values found")
+}
+
+##summarize of mosquiot rate by zone
+spokojan_mosquitorate_post<-spokojan_claims_post%>%group_by(Zone,Post_C1)%>%summarize(count.=n())%>%ungroup()%>%group_by(Zone)%>%mutate(Percent.count=round((count./sum(count.))*100,2))%>%ungroup()
+spokojan_mosquitorate_post_zone<-spokojan_mosquitorate_post%>%group_by(Zone)%>%summarise(sum(count.))%>%ungroup()
+
+
+
+
+
+```
+
+```{r SPOKOJAN - sociodemographic_placebo vs treatment, eval=FALSE}
+spokojan_socio_placebovstreatment<-full_join(spokojan_sociodemographic,spokojan_zone_only,by="ID_No")
+spokojan_socio_placebovstreatment<-spokojan_socio_placebovstreatment%>%mutate(
+  Intervention.group=case_when(Zone=="Zone 1" | Zone=="Zone 4" ~ "Treatment",
+                               Zone=="Zone 2" | Zone=="Zone 3" ~ "Placebo"))
+spokojan_socio_placebovstreatment<-spokojan_socio_placebovstreatment%>%mutate(
+  Total.household.category=case_when(Total.household<=2 ~ "0-2",
+                                     Total.household>2 & Total.household<=4 ~ "3-4",
+                                     Total.household>4 & Total.household<=6 ~ "5-6",
+                                     Total.household>6 & Total.household<=8 ~ "7-8",
+                                     Total.household>9 & Total.household<=10 ~ "9-10"))
+
+##REPEAT FOR SOCIODEMOGARPHIC
+spokojan_placebo_treatment_only<-spokojan_socio_placebovstreatment%>%group_by(Intervention.group)%>%summarise(n())
+
+spokojan_socio_placebovstreatment_agesummary<-spokojan_socio_placebovstreatment%>%group_by(Intervention.group)%>%summarise(
+  Median.age=median(Age,na.rm=TRUE),
+  IQR.range=IQR(Age,na.rm=TRUE),
+  Mean.age=mean(Age,na.rm=TRUE),
+  Std.age=sd(Age, na.rm=TRUE),
+  Max.age=max(Age,na.rm=TRUE),
+  Min.age=min(Age,na.rm=TRUE))
+
+spokojan_socio_placebovstreatment_summary_Gender<-spokojan_socio_placebovstreatment%>%
+  group_by(Gender,Intervention.group)%>%summarise(
+Gender.count=n())%>%ungroup()%>%group_by(Intervention.group)%>%mutate(                         Percent.gender=round((Gender.count/sum(Gender.count))*100,2))
+
+spokojan_socio_placebovstreatment_summary_Race<-spokojan_socio_placebovstreatment%>%
+  group_by(Race,Intervention.group)%>%summarise(
+Race.count=n())%>%ungroup()%>%group_by(Intervention.group)%>%mutate(                         Percent.race=round((Race.count/sum(Race.count))*100,2))
+
+spokojan_socio_placebovstreatment_summary_otherrace<-spokojan_socio_placebovstreatment%>%filter(!Other.race=="99")%>%group_by(Other.race,Intervention.group)%>%summarise(
+Other.race.count=n())%>%ungroup()%>%group_by(Intervention.group)%>%mutate(
+Percent.other.race=round((Other.race.count/sum(Other.race.count))*100,2))
+
+spokojan_socio_placebovstreatment_summary_religion<-spokojan_socio_placebovstreatment%>%
+  group_by(Religion,Intervention.group)%>%summarise(
+Religion.count=n())%>%ungroup()%>%group_by(Intervention.group)%>%mutate(
+  Percentage.religion=round((Religion.count/sum(Religion.count))*100,2))
+
+spokojan_socio_placebovstreatment_summary_education<-spokojan_socio_placebovstreatment%>%
+  group_by(Highest.Education.Level,Intervention.group)%>%summarise(
+Education.count=n())%>%ungroup()%>%group_by(Intervention.group)%>%mutate(
+  Percentage.education=round((Education.count/sum(Education.count))*100,2))
+
+spokojan_socio_placebovstreatment_summary_occupation<-spokojan_socio_placebovstreatment%>%
+  group_by(Occupation,Intervention.group)%>%summarise(
+Occupation.count=n())%>%ungroup()%>%group_by(Intervention.group)%>%mutate(
+  Percentage.occupation=round((Occupation.count/sum(Occupation.count))*100,2))
+
+spokojan_socio_placebovstreatment_household<-spokojan_socio_placebovstreatment%>%
+  mutate(Total.household=as.character(Total.household))%>%
+  group_by(Total.household,Intervention.group)%>%summarise(
+Total.household.count=n())%>%ungroup()%>%group_by(Intervention.group)%>%mutate(
+  Percentage.total.household=round((Total.household.count/sum(Total.household.count))*100,2))
+as.integer(spokojan_socio_placebovstreatment_household$Total.household)
+
+spokojan_socio_placebovstreatment_household2<-spokojan_socio_placebovstreatment_household%>%
+  mutate(Total.household.category=case_when(Total.household<=2 ~ "0-2",
+                                   Total.household>2 & Total.household<=4~ "3-4",
+                                   Total.household>4 & Total.household<=6 ~ "5-6",
+                                   Total.household>6 & Total.household<=8 ~ "7-8",
+                                   Total.household>8 | Total.household<=10 ~ "9-10"))
+as.integer(spokojan_socio_placebovstreatment_household2$Total.household.count)
+spokojan_socio_placebovstreatment_household3<-spokojan_socio_placebovstreatment_household2%>%group_by(Total.household.category,Intervention.group)%>%summarise(Category.count=sum(Total.household.count))%>%ungroup()%>%group_by(Intervention.group)%>%mutate(
+  Percent.category=round((Category.count/sum(Category.count))*100,2))
+
+spokojan_socio_placebovstreatment_income<-spokojan_socio_placebovstreatment%>%
+  group_by(Average.monthly.household.income,Intervention.group)%>%summarise(
+Monthly.income.count=n())%>%ungroup()%>%group_by(Intervention.group)%>%mutate(
+  Percentage.monthly.income=round((Monthly.income.count/sum(Monthly.income.count))*100,2))
+
+spokojan_socio_placebovstreatment_housetype<-spokojan_socio_placebovstreatment%>%
+  group_by(House.type,Intervention.group)%>%summarise(
+Housetype.count=n())%>%ungroup()%>%group_by(Intervention.group)%>%mutate(
+  Percentage.Housetype=round((Housetype.count/sum(Housetype.count))*100,2))
+
+####run t test and chi square
+##check normality for age first
+hist(spokojan_socio_placebovstreatment[["Age"]],breaks = 100,xlim = c(0,100))
+placebo_age<-spokojan_socio_placebovstreatment$Age[spokojan_socio_placebovstreatment$Intervention.group=="Placebo"]
+treatment_age<-spokojan_socio_placebovstreatment$Age[spokojan_socio_placebovstreatment$Intervention.group=="Treatment"]
+twosample_KS_age<-ks.test(placebo_age,treatment_age)
+print(twosample_KS_age)
+shapiro_result_age_placebo<-shapiro.test(placebo_age)
+shapiro_result_age_treatment<-shapiro.test(treatment_age)
+print(shapiro_result_age_placebo)
+print(shapiro_result_age_treatment)
+##data in both group is normally ditributed, proceed with t test
+t_test_age<-t.test(placebo_age,treatment_age)
+print(t.test.result)
+print(t_test_age)
+
+##RUN CHI SQAUE
+contigency_table_gender<-table(spokojan_socio_placebovstreatment$Intervention.group,spokojan_socio_placebovstreatment$Gender)
+print(contigency_table_gender)
+chi.square.test.gender<-chisq.test(contigency_table_gender)
+print(chi.square.test.gender)
+
+contigency_table_race<-table(spokojan_socio_placebovstreatment$Intervention.group,spokojan_socio_placebovstreatment$Race)
+print(contigency_table_race)
+chi.square.test.race<-chisq.test(contigency_table_race)
+print(chi.square.test.race)
+
+contigency_table_religion<-table(spokojan_socio_placebovstreatment$Intervention.group,spokojan_socio_placebovstreatment$Religion)
+print(contigency_table_religion)
+chi.square.religion<-chisq.test(contigency_table_religion)
+print(chi.square.religion)
+fisher.exact.test.religion<-fisher.test(contigency_table_religion)
+print(fisher.exact.test.religion)
+fisher.exact.test.religion_simulation <- fisher.test(contigency_table_religion, simulate.p.value = TRUE, B = 1e6)
+print(fisher.exact.test.religion_simulation)
+
+contigency_table_education<-table(spokojan_socio_placebovstreatment$Intervention.group,spokojan_socio_placebovstreatment$Highest.Education.Level)
+print(contigency_table_education)
+chi.square.test.education<-chisq.test(contigency_table_education)
+print(chi.square.test.education)
+
+contigency_table_occupation<-table(spokojan_socio_placebovstreatment$Intervention.group,spokojan_socio_placebovstreatment$Occupation)
+print(contigency_table_occupation)
+chi.square.occupation<-chisq.test(contigency_table_occupation)
+print(chi.square.occupation)
+fisher_test_occupation_simulation <- fisher.test(contigency_table_occupation, simulate.p.value = TRUE, B = 1e6)
+print(fisher_test_occupation_simulation)
+
+contigency_table_household<-table(spokojan_socio_placebovstreatment$Intervention.group,spokojan_socio_placebovstreatment$Total.household.category)
+print(contigency_table_household)
+chi.square.household<-chisq.test(contigency_table_household)
+print(chi.square.household)
+fisher.exact.test.household<-fisher.test(contigency_table_household)
+print(fisher.exact.test.household)
+fisher.exact.test.household_simulation <- fisher.test(contigency_table_household, simulate.p.value = TRUE, B = 1e6)
+print(fisher.exact.test.household_simulation)
+
+contigency_table_income<-table(spokojan_socio_placebovstreatment$Intervention.group,spokojan_socio_placebovstreatment$Average.monthly.household.income)
+print(contigency_table_income)
+chi.square.test.income<-chisq.test(contigency_table_income)
+print(chi.square.test.income)
+
+contigency_table_housetype<-table(spokojan_socio_placebovstreatment$Intervention.group,spokojan_socio_placebovstreatment$House.type)
+print(contigency_table_housetype)
+chi.square.test.housetype<-chisq.test(contigency_table_housetype)
+print(chi.square.test.housetype)
+
+
+```
+
+```{r SPOKOJAN - descriptive claims of mosquito rate, placebo vs treatment, eval=FALSE}
+##SELECT DESIRED COLUMN ONLY (ID, ID_NO, Pre_C1, Post_C1, Intervention group, Zone)
+spokojan_descriptive_placebovstreatment<-spokojan_claims_2%>%select(c(ID,ID_No,Pre_C1,Post_C1,Intervention.group,Zone))
+
+##placebo only
+spokojan_descriptive_placeboonly<-spokojan_descriptive_placebovstreatment%>%filter(
+  Intervention.group=="Placebo")
+spokojan_descriptive_treatmentonly<-spokojan_descriptive_placebovstreatment%>%filter(
+  Intervention.group=="Treatment")
+
+
+##filter not completed post survey
+spokojan_descriptive_placeboonly_filtered<-spokojan_descriptive_placeboonly%>%filter(
+  !Post_C1=="999")
+is.na(spokojan_descriptive_placeboonly_filtered)
+spokojan_descriptive_treatmentonly_filtered<-spokojan_descriptive_treatmentonly%>%filter(
+  !Post_C1=="999")
+is.na(spokojan_descriptive_placeboonly_filtered)
+
+##run mcnemar test
+table_mcnemar_placebo<-table(spokojan_descriptive_placeboonly_filtered$Pre_C1,spokojan_descriptive_placeboonly_filtered$Post_C1)
+print(table_mcnemar_placebo)
+mcnemar_placebo<-mcnemar.test(table_mcnemar_placebo)
+print(mcnemar_placebo)
+
+table_mcnemar_treatment<-table(spokojan_descriptive_treatmentonly_filtered$Pre_C1,spokojan_descriptive_treatmentonly_filtered$Post_C1)
+print(table_mcnemar_treatment)
+mcnemar_treatment<-mcnemar.test(table_mcnemar_treatment)
+print(mcnemar_treatment)
+
+##lets compare mosquito rate post trial, between placebo vs treatment
+spokojan_descrptive_filtered_postonly<-spokojan_descriptive_placebovstreatment%>%select(c(ID,ID_No,Post_C1,Intervention.group))
+spokojan_descrptive_filtered_postonly<-spokojan_descrptive_filtered_postonly%>%filter(
+  !Post_C1=="999")
+spokojan_post_only_table<-table(spokojan_descrptive_filtered_postonly$Post_C1,spokojan_descrptive_filtered_postonly$Intervention.group)
+print(spokojan_post_only_table)
+chi.square.descriptive.post.only<-chisq.test(spokojan_post_only_table)
+print(chi.square.descriptive.post.only)
+df.spokojan_post_only_table<-as.data.frame(spokojan_post_only_table)
+df.spokojan_post_only_table<-df.spokojan_post_only_table%>%group_by(Var2)%>%mutate(
+  Post.percentage=round((Freq/sum(Freq))*100,2))%>%ungroup()
+
+
+
+
+```
+
+```{r SPOKOJAN - descriptive claims of mosquito bites/day, placebo vs treatment, eval=FALSE}
+spokojan_mosquito_bites<-spokojan_claims_2%>%select(c(ID,ID_No,Pre_C2,Post_C2,Intervention.group))
+spokojan_mosquito_bites<-spokojan_mosquito_bites%>%filter(!Post_C2%in%c("999","NA"))
+##Why spokojna_mosquito_bites havd 619 and not 618 as spokojan_claims_post??
+##check which ID_No is in discordance between two df
+spokojan_complete_ID<-spokojan_descrptive_filtered_postonly[["ID_No"]]
+spokojan_mosquito_bites<-spokojan_mosquito_bites%>%filter(ID_No%in%spokojan_complete_ID)
+which(is.na(spokojan_mosquito_bites))
+which(any(spokojan_mosquito_bites==""))
+mosquito_bites_table<-table(spokojan_mosquito_bites$Post_C2,spokojan_mosquito_bites$Intervention.group)
+print(mosquito_bites_table)
+chi.square.mosquito.bites<-chisq.test(mosquito_bites_table)
+##have to use fisher exact
+fisher.exact.mosquito.bites<-fisher.test(mosquito_bites_table,simulate.p.value = TRUE, B = 1e6)
+print(fisher.exact.mosquito.bites)
+
+
+spokojan_mosquito_bites_post_only_table<-table(spokojan_mosquito_bites$Post_C2,spokojan_mosquito_bites$Intervention.group)
+print(spokojan_mosquito_bites_post_only_table)
+fisher.exact.mosq.bites.post.only<-fisher.test(spokojan_mosquito_bites_post_only_table,simulate.p.value = TRUE, B = 1e6)
+print(fisher.exact.mosq.bites.post.only)
+df.spokojan_mosq.bite.post_only_table<-as.data.frame(spokojan_mosquito_bites_post_only_table)
+df.spokojan_mosq.bite.post_only_table<-df.spokojan_mosq.bite.post_only_table%>%group_by(Var2)%>%mutate(
+  Post.percentage=round((Freq/sum(Freq))*100,2))%>%ungroup()
+
+```
+
+```{r SPOKOJAN - quantitative claims of mosquito outdoor population, placebo vs treatment, eval=FALSE}
+
+write.csv(spokojan_database,"spokojan_database_16-6-2024.csv",row.names = FALSE)
+
+##work starting spokojan database
+View(spokojan_database)
+spokojan_database_placebo<-spokojan_database%>%filter(Arm=="Placebo")
+
+##group by week and event
+spokojan_database_placebo_week<-spokojan_database_placebo%>%group_by(Event,Week)%>%summarise(
+  Total.Ae.aegypti=sum(Ae.aegypti),
+  Total.Ae.albopictus=sum(Ae.albopictus),
+  Total.culex=sum(Cultex.sp.),
+  Grand.total=sum(Total))%>%ungroup()
+
+##edit week, take week ending only and sort
+spokojan_database_placebo_week<-spokojan_database_placebo_week%>%mutate(
+  Week.ending=case_when((nchar(spokojan_database_placebo_week$Week)==5)~substr(spokojan_database_placebo_week$Week,4,5),
+                        (nchar(spokojan_database_placebo_week$Week)==6)~substr(spokojan_database_placebo_week$Week,4,6),
+                        (nchar(spokojan_database_placebo_week$Week)==7)~substr(spokojan_database_placebo_week$Week,5,7),TRUE~"NA"))
+
+##re-order week ending and event
+spokojan_database_placebo_week<-spokojan_database_placebo_week%>%mutate(
+  Week.ending=factor(Week.ending,levels=c("W2","W4","W6","W8","W10","W12",
+                                        "W14","W16","W18","W20","W22","W24","W26","W28","W30")),
+  Event=factor(Event,levels=c("Baseline","Intervention")))
+str(spokojan_database_placebo_week)
+spokojan_database_placebo_week_long<-pivot_longer(spokojan_database_placebo_week,cols = c(Total.Ae.aegypti,Total.Ae.albopictus,Total.culex,Grand.total),names_to = "Mosquito species",values_to = "Count")
+##rename data
+spokojan_database_placebo_week_long<-spokojan_database_placebo_week_long%>%
+  mutate(`Mosquito species`=case_when(`Mosquito species`=="Total.Ae.aegypti" ~ "Ae.aegypti",
+                                    `Mosquito species`=="Total.Ae.albopictus" ~ "Ae.albopictus",
+                                    `Mosquito species`=="Total.culex" ~ "Culex",TRUE~`Mosquito species`))
+
+##create one variable (combine Week ending and Event for plotting)
+spokojan_database_placebo_week_long<-spokojan_database_placebo_week_long%>%
+  unite("Event_week.ending",Event,Week.ending,sep = "-",remove = FALSE)
+spokojan_database_placebo_week_long<-spokojan_database_placebo_week_long%>%arrange(Event, Week.ending)%>%mutate(Event_week.ending=factor(Event_week.ending,levels=unique(Event_week.ending)))
+str(spokojan_database_placebo_week_long)
+
+##plot line graph
+mosquito_placebo<-ggplot(spokojan_database_placebo_week_long, aes(x = Event_week.ending, y = Count, color = `Mosquito species`, group = `Mosquito species`)) +
+  geom_point(size=1.5) +
+  geom_line(linewidth=1.0)+
+  scale_color_brewer(type = "seq",aesthetics = "colour",palette = "RdPu")+
+  labs(title = "Mosquito Population by Week (Placebo)",
+       x = "",
+       y = "Count (n)",
+       color = "Mosquito species") +
+  geom_vline(xintercept =15.5, linetype = "dashed",colour="darkred",linewidth=1.0) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+        legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5))
+ggsave("mosquito_population_placebo.png",plot = mosquito_placebo,bg="white",width = 6,height = 4,dpi = 350)                                                                          
+
+##repeat for treatmnet
+View(spokojan_database)
+spokojan_database_treatment<-spokojan_database%>%filter(Arm=="Treatment")
+
+##group by week and event
+spokojan_database_treatment_week<-spokojan_database_treatment%>%group_by(Event,Week)%>%summarise(
+  Total.Ae.aegypti=sum(Ae.aegypti),
+  Total.Ae.albopictus=sum(Ae.albopictus),
+  Total.cultex=sum(Cultex.sp.),
+  Grand.total=sum(Total))%>%ungroup()
+
+##edit week, take week ending only and sort
+spokojan_database_treatment_week<-spokojan_database_treatment_week%>%mutate(
+  Week.ending=case_when((nchar(spokojan_database_treatment_week$Week)==5)~substr(spokojan_database_placebo_week$Week,4,5),
+                        (nchar(spokojan_database_treatment_week$Week)==6)~substr(spokojan_database_placebo_week$Week,4,6),
+                        (nchar(spokojan_database_treatment_week$Week)==7)~substr(spokojan_database_placebo_week$Week,5,7),TRUE~"NA"))
+
+##re-order week ending and event
+spokojan_database_treatment_week<-spokojan_database_treatment_week%>%mutate(
+  Week.ending=factor(Week.ending,levels=c("W2","W4","W6","W8","W10","W12",
+                                        "W14","W16","W18","W20","W22","W24","W26","W28","W30")),
+  Event=factor(Event,levels=c("Baseline","Intervention")))
+str(spokojan_database_treatment_week)
+spokojan_database_treatment_week_long<-pivot_longer(spokojan_database_treatment_week,cols = c(Total.Ae.aegypti,Total.Ae.albopictus,Total.cultex,Grand.total),names_to = "Mosquito species",values_to = "Count")
+##rename data
+spokojan_database_treatment_week_long<-spokojan_database_treatment_week_long%>%
+  mutate(`Mosquito species`=case_when(`Mosquito species`=="Total.Ae.aegypti" ~ "Ae.aegypti",
+                                    `Mosquito species`=="Total.Ae.albopictus" ~ "Ae.albopictus",
+                                    `Mosquito species`=="Total.cultex" ~ "Culex",
+                                    TRUE~`Mosquito species`))
+
+##create one variable (combine Week ending and Event for plotting)
+spokojan_database_treatment_week_long<-spokojan_database_treatment_week_long%>%
+  unite("Event_week.ending",Event,Week.ending,sep = "-",remove = FALSE)
+spokojan_database_treatment_week_long<-spokojan_database_treatment_week_long%>%arrange(Event, Week.ending)%>%mutate(Event_week.ending=factor(Event_week.ending,levels=unique(Event_week.ending)))
+str(spokojan_database_treatment_week_long)
+
+##plot line graph
+mosquito_treatment<-ggplot(spokojan_database_treatment_week_long, aes(x = Event_week.ending, y = Count, color = `Mosquito species`, group = `Mosquito species`)) +
+  geom_line(linewidth=1.0) +
+  geom_point(size=1.5) +
+  scale_color_brewer(type = "seq",aesthetics = "colour",palette = "RdPu")+
+  labs(title = "Mosquito Population by Week (Treatment)",
+       x = "",
+       y = "Count (n)",
+       color = "Mosquito species") +
+  geom_vline(xintercept =15.5, linetype = "dashed",colour="darkred",linewidth=1.0) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+        legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5))
+ggsave("mosquito_population_treatment.png",plot = mosquito_treatment,bg="white",width = 6,height = 4,dpi = 350)                                                                          
+
+
+
+
+```
+
+```{r SPOKOJAN - quantitative data, plot line graph for each zone to visualize, eval=FALSE}
+##spokojan database edited
+##test buat line graph for each zone
+str(spokojan_database_added)
+spokojan_database_added<-spokojan_database_added%>%mutate(
+  Event=factor(Event,levels=c("Baseline","Intervention")),
+  Week_ending=factor(Week_ending,levels=c("W2","W4","W6","W8","W10","W12",
+                                        "W14","W16","W18","W20","W22","W24","W26","W28","W30")))
+
+
+##TO EDIT VARIABLE!!!!!!!!!!!!!!!!!!!!!!!!!!!1
+spokojan_database_added_byzone_longer<-pivot_longer(spokojan_database_added_byzone,cols = c(Ae.aegypti,Ae.albopictus,Cultex.sp.,Total),names_to = "Mosquito species",values_to = "Count")
+##rename data
+spokojan_database_added_byzone_longer<-spokojan_database_added_byzone_longer%>%
+  mutate(`Mosquito species`=case_when(`Mosquito species`=="Cultex.sp." ~ "Culex",
+                                    TRUE~`Mosquito species`))
+spokojan_database_added_byzone_longer<-spokojan_database_added_byzone_longer%>%unite("Event_week.ending",Event,Week_ending,sep = "-",remove = FALSE)
+str(spokojan_database_added_byzone_longer)
+spokojan_database_added_byzone_longer<-spokojan_database_added_byzone_longer%>%mutate(Event_week.ending=factor(Event_week.ending,levels=unique(Event_week.ending)))
+str(spokojan_database_added_byzone_longer)
+                                                                                                               
+##do for zone 1-4
+spokojan_database_added_byzone_longer_zone1<-spokojan_database_added_byzone_longer%>%filter(Zone=="1" & `Mosquito species`=="Total")
+spokojan_database_added_byzone_longer_zone2<-spokojan_database_added_byzone_longer%>%filter(Zone=="2" & `Mosquito species`=="Total")
+spokojan_database_added_byzone_longer_zone3<-spokojan_database_added_byzone_longer%>%filter(Zone=="3" & `Mosquito species`=="Total")
+spokojan_database_added_byzone_longer_zone4<-spokojan_database_added_byzone_longer%>%filter(Zone=="4" & `Mosquito species`=="Total")
+
+ggplot(spokojan_database_added_byzone_longer_zone1, aes(x = Event_week.ending, y = Count)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  scale_fill_brewer(type = "seq", palette = "RdPu") +
+  labs(title = "Mosquito Population by Week (Zone 1)",
+       x = "",
+       y = "Count (n)",
+       fill = "Mosquito species") +
+  geom_vline(xintercept = 15.5, linetype = "dashed", color = "darkred", linewidth = 1.0) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+        legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5))+
+  scale_y_continuous(limits = c(0,450))
+
+ggplot(spokojan_database_added_byzone_longer_zone2, aes(x = Event_week.ending, y = Count)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  scale_fill_brewer(type = "seq", palette = "RdPu") +
+  labs(title = "Mosquito Population by Week (Zone 2)",
+       x = "",
+       y = "Count (n)",
+       fill = "Mosquito species") +
+  geom_vline(xintercept = 15.5, linetype = "dashed", color = "darkred", linewidth = 1.0) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+        legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5))+
+  scale_y_continuous(limits = c(0,450))
+
+ggplot(spokojan_database_added_byzone_longer_zone3, aes(x = Event_week.ending, y = Count)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  scale_fill_brewer(type = "seq", palette = "RdPu") +
+  labs(title = "Mosquito Population by Week (Zone 3)",
+       x = "",
+       y = "Count (n)",
+       fill = "Mosquito species") +
+  geom_vline(xintercept = 15.5, linetype = "dashed", color = "darkred", linewidth = 1.0) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+        legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5))+
+  scale_y_continuous(limits = c(0,450))
+
+ggplot(spokojan_database_added_byzone_longer_zone4, aes(x = Event_week.ending, y = Count)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  scale_fill_brewer(type = "seq", palette = "RdPu") +
+  labs(title = "Mosquito Population by Week (Zone 4)",
+       x = "",
+       y = "Count (n)",
+       fill = "Mosquito species") +
+  geom_vline(xintercept = 15.5, linetype = "dashed", color = "darkred", linewidth = 1.0) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+        legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5))+
+  scale_y_continuous(limits = c(0,450))
+
+
+
+
+```
+
+```{r SPOKOJAN - percentage reduction baseline vs interventiion by zone, eval=FALSE}
+##zone 1
+spokojan_database_added_byzone_longer_zone1_summary<-spokojan_database_added_byzone_longer_zone1%>%group_by(Event)%>%summarise(sum(Count))
+spokojan_database_added_byzone_longer_zone1_summary<-spokojan_database_added_byzone_longer_zone1_summary%>%mutate(Percent.detection=((`sum(Count)`-2025)/-2025)*100)
+
+##zone 2
+spokojan_database_added_byzone_longer_zone2_summary<-spokojan_database_added_byzone_longer_zone2%>%group_by(Event)%>%summarise(sum(Count))
+spokojan_database_added_byzone_longer_zone2_summary<-spokojan_database_added_byzone_longer_zone2_summary%>%mutate(Percent.detection=((`sum(Count)`-2040)/-2040)*100)
+
+##zone 3
+spokojan_database_added_byzone_longer_zone3_summary<-spokojan_database_added_byzone_longer_zone3%>%group_by(Event)%>%summarise(sum(Count))
+spokojan_database_added_byzone_longer_zone3_summary<-spokojan_database_added_byzone_longer_zone3_summary%>%mutate(Percent.detection=((`sum(Count)`-1647)/-1647)*100)
+
+##zone 4
+spokojan_database_added_byzone_longer_zone4_summary<-spokojan_database_added_byzone_longer_zone4%>%group_by(Event)%>%summarise(sum(Count))
+spokojan_database_added_byzone_longer_zone4_summary<-spokojan_database_added_byzone_longer_zone4_summary%>%mutate(Percent.detection=((`sum(Count)`-1691)/-1691)*100)
+
+##try by arm
+spokojan_database_added_byzone_longer_summary<-spokojan_database_added_byzone_longer%>%group_by(Arm,Event)%>%summarise(sum(Count))
+spokojan_database_added_byzone_longer_zone4_summary<-spokojan_database_added_byzone_longer_zone4_summary%>%mutate(Percent.detection=((`sum(Count)`-1691)/-1691)*100)
+
+```
+
+
